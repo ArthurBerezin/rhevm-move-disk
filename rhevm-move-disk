@@ -1,0 +1,129 @@
+#!/usr/bin/python
+#
+# Move RHEV disks between VMs
+#
+# This tool is NOT supported by Arthur Berezin nor by my Matrix / Red Hat
+# Use at your own risk/will. 
+#
+# Please Report Bugs to:
+# Arthur (AT) berezins (DOT) com
+#
+
+import psycopg2
+import optparse
+import sys
+
+def get_vm_id_status(vm_name):
+    """Get VM current status from Database"""
+
+    try:
+	conn = psycopg2.connect("dbname='rhevm' user='rhevm' host='localhost'")
+   	cur = conn.cursor()
+        cur.execute("SELECT status,vm_guid FROM vms WHERE vm_name=%s",(vm_name,))
+        rows = cur.fetchall()
+    except:
+        print "Unable to connect to rhevm database(get)"
+        sys.exc_info()[0]
+	raise
+	exit(2)
+   
+    # if source vm not found or more than one source VM found
+    if len(rows)==0:
+        print "Error: Could not find VM %s." % (vm_name,)
+        exit(2)
+    elif len(rows)>1:
+        print "Error: More than one VM specified SOURCE-VM-NAME."
+        for row in rows:
+	    print "   ", row[1][1]
+	exit(2)
+    else:
+        status = rows[0][0]
+        vm_id  = rows[0][1]
+    cur.close()
+    conn.close()
+    return vm_id,status
+
+def set_disk_to_VM(src_vm_id,disk_name,dst_vm_id):
+    """Set disk iage id to destination vm id"""
+
+    # Get disk ID
+    try:
+        conn = psycopg2.connect("dbname='rhevm' user='rhevm' host='localhost'")
+        cur = conn.cursor()
+        cur.execute("SELECT image_guid FROM vm_images_view WHERE vm_guid = %s and internal_drive_mapping = %s ORDER BY creation_date DESC",(src_vm_id,disk_name))
+        rows = cur.fetchall()
+	# if source vm not found or more than one source VM found
+	if len(rows)==0:
+            print "Error: Could not find VM %s." % (src_vm_id,)
+            exit(2)
+        elif len(rows)>1:
+            print "Error: More than one VM specified SOURCE-VM-NAME."
+            exit(2)
+	else:
+            disk_id = rows[0][0]
+    except:
+        print "Unable to connect to rhevm database(set)"
+        sys.exc_info()[0]
+        raise
+        exit(2)
+    
+    # Set new vm id to disk id
+    try:
+        conn = psycopg2.connect("dbname='rhevm' user='rhevm' host='localhost'")
+        cur = conn.cursor()
+        cur.execute("UPDATE image_vm_map SET vm_id=%s WHERE image_id=%s  ",(dst_vm_id,disk_id))
+        conn.commit()
+	cur.close()
+        print "moving disk %s to vm %s" % (disk_id,dst_vm_id)
+
+    except:
+        print "Unable to update rhevm database"
+        sys.exc_info()[0]
+        raise
+        exit(2)
+
+    
+    print "Sussefully moved disk_id %s" % disk_id
+
+def main():
+
+   # Set script options
+   parser = optparse.OptionParser("Usage: %prog --source-vm=SOURCE-VM-NAME --disk-name=DISK-NAME --destination-vm=DESTINATION-VM-NAME\nPlease note: This tool is not yet supported by Red Hat / Arthur Berezin / Matrix")
+
+   parser.add_option("-s", "--source-vm", dest="source_vm_name",
+					  type="string",help="Source VM name")
+   parser.add_option("-D", "--disk-name", dest="disk_name",
+					  type="string",help="Virtual disk name to be moved")
+   parser.add_option("-d", "--destination-vm", dest="destination_vm_name",
+					  type="string",help="Destination VM name")
+
+   # Read Spesified Options
+   (options, args) = parser.parse_args()
+
+   # Set Local Vars
+   source_vm_name 	= (options.source_vm_name 	if options.source_vm_name is not None 
+                           		          	else parser.error('Source VM name not given, -s option'))
+   disk_id 		= (options.disk_name 		if options.disk_name is not None
+			                          	else parser.error('Disk name not given, should be "1" for example, -D option '))
+   destination_vm_name 	= (options.destination_vm_name 	if options.destination_vm_name is not None
+                         			       	else parser.error('Destination VM name not given, -d option'))
+   # Get source and destination VM status
+   source_vm_id		,source_vm_status 	= get_vm_id_status(source_vm_name)
+   destination_vm_id	,destination_vm_status 	= get_vm_id_status(destination_vm_name)
+   
+   print "Source VM (%s) id = %s, Destination VM (%s) id=%s" % (source_vm_name,source_vm_id,destination_vm_name,destination_vm_id)
+   
+   # check that both source VM and destination VM are down
+   if source_vm_status!=0:
+       print "Error: Source VM is not down!"
+       exit(1)
+
+   if destination_vm_status!=0:
+       print "Error: Destination VM is not down!"
+       exit(1)
+   
+   set_disk_to_VM(source_vm_id,disk_id,destination_vm_id)
+
+
+if __name__ == "__main__":
+	sys.exit(main())
